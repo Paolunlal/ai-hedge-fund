@@ -1,4 +1,3 @@
-from langchain_openai import ChatOpenAI
 from graph.state import AgentState, show_agent_reasoning
 from tools.api import get_financial_metrics, get_market_cap, search_line_items
 from langchain_core.prompts import ChatPromptTemplate
@@ -32,7 +31,6 @@ def cathie_wood_agent(state: AgentState):
 
     for ticker in tickers:
         progress.update_status("cathie_wood_agent", ticker, "Fetching financial metrics")
-        # You can adjust these parameters (period="annual"/"ttm", limit=5/10, etc.)
         metrics = get_financial_metrics(ticker, end_date, period="annual", limit=5)
 
         progress.update_status("cathie_wood_agent", ticker, "Gathering financial line items")
@@ -91,7 +89,7 @@ def cathie_wood_agent(state: AgentState):
             "valuation_analysis": valuation_analysis
         }
 
-        progress.update_status("cathie_wood_agent", ticker, "Generating Cathie Wood style analysis")
+        progress.update_status("cathie_wood_agent", ticker, "Generating Cathie Wood analysis")
         cw_output = generate_cathie_wood_output(
             ticker=ticker,
             analysis_data=analysis_data,
@@ -143,19 +141,19 @@ def analyze_disruptive_potential(metrics: list, financial_line_items: list) -> d
         }
 
     # 1. Revenue Growth Analysis - Check for accelerating growth
-    revenues = [item.revenue for item in financial_line_items if item.revenue is not None]
+    revenues = [item.revenue for item in financial_line_items if item.revenue]
     if len(revenues) >= 3:  # Need at least 3 periods to check acceleration
         growth_rates = []
         for i in range(len(revenues)-1):
             if revenues[i] and revenues[i+1]:
-                growth_rate = (revenues[i+1] - revenues[i]) / abs(revenues[i])
+                growth_rate = (revenues[i+1] - revenues[i]) / abs(revenues[i]) if revenues[i] != 0 else 0
                 growth_rates.append(growth_rate)
-        
+
         # Check if growth is accelerating
         if len(growth_rates) >= 2 and growth_rates[-1] > growth_rates[0]:
             score += 2
             details.append(f"Revenue growth is accelerating: {(growth_rates[-1]*100):.1f}% vs {(growth_rates[0]*100):.1f}%")
-        
+
         # Check absolute growth rate
         latest_growth = growth_rates[-1] if growth_rates else 0
         if latest_growth > 1.0:
@@ -180,7 +178,7 @@ def analyze_disruptive_potential(metrics: list, financial_line_items: list) -> d
         elif margin_trend > 0:
             score += 1
             details.append(f"Slightly improving gross margins: +{(margin_trend*100):.1f}%")
-        
+
         # Check absolute margin level
         if gross_margins[-1] > 0.50:  # High margin business
             score += 2
@@ -189,13 +187,17 @@ def analyze_disruptive_potential(metrics: list, financial_line_items: list) -> d
         details.append("Insufficient gross margin data")
 
     # 3. Operating Leverage Analysis
-    revenues = [item.revenue for item in financial_line_items if item.revenue is not None]
-    operating_expenses = [item.operating_expense for item in financial_line_items if hasattr(item, 'operating_expense') and item.operating_expense is not None]
-    
+    revenues = [item.revenue for item in financial_line_items if item.revenue]
+    operating_expenses = [
+        item.operating_expense
+        for item in financial_line_items
+        if hasattr(item, "operating_expense") and item.operating_expense
+    ]
+
     if len(revenues) >= 2 and len(operating_expenses) >= 2:
         rev_growth = (revenues[-1] - revenues[0]) / abs(revenues[0])
         opex_growth = (operating_expenses[-1] - operating_expenses[0]) / abs(operating_expenses[0])
-        
+
         if rev_growth > opex_growth:
             score += 2
             details.append("Positive operating leverage: Revenue growing faster than expenses")
@@ -250,19 +252,23 @@ def analyze_innovation_growth(metrics: list, financial_line_items: list) -> dict
         }
 
     # 1. R&D Investment Trends
-    rd_expenses = [item.research_and_development for item in financial_line_items if hasattr(item, 'research_and_development') and item.research_and_development is not None]
-    revenues = [item.revenue for item in financial_line_items if item.revenue is not None]
-    
+    rd_expenses = [
+        item.research_and_development
+        for item in financial_line_items
+        if hasattr(item, "research_and_development") and item.research_and_development
+    ]
+    revenues = [item.revenue for item in financial_line_items if item.revenue]
+
     if rd_expenses and revenues and len(rd_expenses) >= 2:
         # Check R&D growth rate
-        rd_growth = (rd_expenses[-1] - rd_expenses[0]) / abs(rd_expenses[0])
+        rd_growth = (rd_expenses[-1] - rd_expenses[0]) / abs(rd_expenses[0]) if rd_expenses[0] != 0 else 0
         if rd_growth > 0.5:  # 50% growth in R&D
             score += 3
             details.append(f"Strong R&D investment growth: +{(rd_growth*100):.1f}%")
         elif rd_growth > 0.2:
             score += 2
             details.append(f"Moderate R&D investment growth: +{(rd_growth*100):.1f}%")
-        
+
         # Check R&D intensity trend
         rd_intensity_start = rd_expenses[0] / revenues[0]
         rd_intensity_end = rd_expenses[-1] / revenues[-1]
@@ -273,12 +279,12 @@ def analyze_innovation_growth(metrics: list, financial_line_items: list) -> dict
         details.append("Insufficient R&D data for trend analysis")
 
     # 2. Free Cash Flow Analysis
-    fcf_vals = [item.free_cash_flow for item in financial_line_items if item.free_cash_flow is not None]
+    fcf_vals = [item.free_cash_flow for item in financial_line_items if item.free_cash_flow]
     if fcf_vals and len(fcf_vals) >= 2:
         # Check FCF growth and consistency
-        fcf_growth = (fcf_vals[-1] - fcf_vals[0]) / abs(fcf_vals[0]) if fcf_vals[0] != 0 else 0
+        fcf_growth = (fcf_vals[-1] - fcf_vals[0]) / abs(fcf_vals[0])
         positive_fcf_count = sum(1 for f in fcf_vals if f > 0)
-        
+
         if fcf_growth > 0.3 and positive_fcf_count == len(fcf_vals):
             score += 3
             details.append("Strong and consistent FCF growth, excellent innovation funding capacity")
@@ -292,11 +298,11 @@ def analyze_innovation_growth(metrics: list, financial_line_items: list) -> dict
         details.append("Insufficient FCF data for analysis")
 
     # 3. Operating Efficiency Analysis
-    op_margin_vals = [item.operating_margin for item in financial_line_items if item.operating_margin is not None]
+    op_margin_vals = [item.operating_margin for item in financial_line_items if item.operating_margin]
     if op_margin_vals and len(op_margin_vals) >= 2:
         # Check margin improvement
         margin_trend = op_margin_vals[-1] - op_margin_vals[0]
-        
+
         if op_margin_vals[-1] > 0.15 and margin_trend > 0:
             score += 3
             details.append(f"Strong and improving operating margin: {(op_margin_vals[-1]*100):.1f}%")
@@ -310,11 +316,11 @@ def analyze_innovation_growth(metrics: list, financial_line_items: list) -> dict
         details.append("Insufficient operating margin data")
 
     # 4. Capital Allocation Analysis
-    capex = [item.capital_expenditure for item in financial_line_items if hasattr(item, 'capital_expenditure') and item.capital_expenditure is not None]
+    capex = [item.capital_expenditure for item in financial_line_items if hasattr(item, 'capital_expenditure') and item.capital_expenditure]
     if capex and revenues and len(capex) >= 2:
         capex_intensity = abs(capex[-1]) / revenues[-1]
         capex_growth = (abs(capex[-1]) - abs(capex[0])) / abs(capex[0]) if capex[0] != 0 else 0
-        
+
         if capex_intensity > 0.10 and capex_growth > 0.2:
             score += 2
             details.append("Strong investment in growth infrastructure")
@@ -325,7 +331,7 @@ def analyze_innovation_growth(metrics: list, financial_line_items: list) -> dict
         details.append("Insufficient CAPEX data")
 
     # 5. Growth Reinvestment Analysis
-    dividends = [item.dividends_and_other_cash_distributions for item in financial_line_items if hasattr(item, 'dividends_and_other_cash_distributions') and item.dividends_and_other_cash_distributions is not None]
+    dividends = [item.dividends_and_other_cash_distributions for item in financial_line_items if hasattr(item, 'dividends_and_other_cash_distributions') and item.dividends_and_other_cash_distributions]
     if dividends and fcf_vals:
         # Check if company prioritizes reinvestment over dividends
         latest_payout_ratio = dividends[-1] / fcf_vals[-1] if fcf_vals[-1] != 0 else 1
@@ -424,27 +430,48 @@ def generate_cathie_wood_output(
     template = ChatPromptTemplate.from_messages([
         (
             "system",
-            """You are a Cathie Wood AI agent, making investment decisions using her principles:\n\n"
-            "1. Seek companies leveraging disruptive innovation.\n"
-            "2. Emphasize exponential growth potential, large TAM.\n"
-            "3. Focus on technology, healthcare, or other future-facing sectors.\n"
-            "4. Consider multi-year time horizons for potential breakthroughs.\n"
-            "5. Accept higher volatility in pursuit of high returns.\n"
-            "6. Evaluate management's vision and ability to invest in R&D.\n\n"
-            "Rules:\n"
-            "- Identify disruptive or breakthrough technology.\n"
-            "- Evaluate strong potential for multi-year revenue growth.\n"
-            "- Check if the company can scale effectively in a large market.\n"
-            "- Use a growth-biased valuation approach.\n"
-            "- Provide a data-driven recommendation (bullish, bearish, or neutral)."""
+            """You are a Cathie Wood AI agent, making investment decisions using her principles:
+
+            1. Seek companies leveraging disruptive innovation.
+            2. Emphasize exponential growth potential, large TAM.
+            3. Focus on technology, healthcare, or other future-facing sectors.
+            4. Consider multi-year time horizons for potential breakthroughs.
+            5. Accept higher volatility in pursuit of high returns.
+            6. Evaluate management's vision and ability to invest in R&D.
+
+            Rules:
+            - Identify disruptive or breakthrough technology.
+            - Evaluate strong potential for multi-year revenue growth.
+            - Check if the company can scale effectively in a large market.
+            - Use a growth-biased valuation approach.
+            - Provide a data-driven recommendation (bullish, bearish, or neutral).
+            
+            When providing your reasoning, be thorough and specific by:
+            1. Identifying the specific disruptive technologies/innovations the company is leveraging
+            2. Highlighting growth metrics that indicate exponential potential (revenue acceleration, expanding TAM)
+            3. Discussing the long-term vision and transformative potential over 5+ year horizons
+            4. Explaining how the company might disrupt traditional industries or create new markets
+            5. Addressing R&D investment and innovation pipeline that could drive future growth
+            6. Using Cathie Wood's optimistic, future-focused, and conviction-driven voice
+            
+            For example, if bullish: "The company's AI-driven platform is transforming the $500B healthcare analytics market, with evidence of platform adoption accelerating from 40% to 65% YoY. Their R&D investments of 22% of revenue are creating a technological moat that positions them to capture a significant share of this expanding market. The current valuation doesn't reflect the exponential growth trajectory we expect as..."
+            For example, if bearish: "While operating in the genomics space, the company lacks truly disruptive technology and is merely incrementally improving existing techniques. R&D spending at only 8% of revenue signals insufficient investment in breakthrough innovation. With revenue growth slowing from 45% to 20% YoY, there's limited evidence of the exponential adoption curve we look for in transformative companies..."
+            """
         ),
         (
             "human",
-            """Based on the following analysis, create a Cathie Wood-style investment signal.\n\n"
-            "Analysis Data for {ticker}:\n"
-            "{analysis_data}\n\n"
-            "Return the trading signal in this JSON format:\n"
-            "{{\n  \"signal\": \"bullish/bearish/neutral\",\n  \"confidence\": float (0-100),\n  \"reasoning\": \"string\"\n}}"""
+            """Based on the following analysis, create a Cathie Wood-style investment signal.
+
+            Analysis Data for {ticker}:
+            {analysis_data}
+
+            Return the trading signal in this JSON format:
+            {{
+              "signal": "bullish/bearish/neutral",
+              "confidence": float (0-100),
+              "reasoning": "string"
+            }}
+            """
         )
     ])
 
